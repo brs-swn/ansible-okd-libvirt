@@ -1,0 +1,25 @@
+[okd4_gateway]
+gw01.your.tld ansible_host=192.168.1.1
+
+[okd4_services]
+services.your.tld ansible_host=192.168.1.130
+
+[okd4_kvm]
+kvm.your.tld ansible_host=192.168.1.53
+
+# OKD4 Cluster - Restricted (DHCP Fixed) .160/27
+[okd4:children]
+okd4_bootstrap
+okd4_master
+okd4_worker
+
+[okd4_bootstrap]
+bootstrap.okd4.your.tld ansible_host=192.168.1.161 mac=52:54:00:b2:bb:f8
+
+[okd4_master]
+master01.okd4.your.tld ansible_host=192.168.1.162 mac=52:54:00:16:56:0a
+master02.okd4.your.tld ansible_host=192.168.1.163 mac=52:54:00:1b:9a:8d
+
+[okd4_worker]
+worker01.okd4.your.tld ansible_host=192.168.1.164 mac=52:54:00:ce:87:f1
+worker02.okd4.your.tld ansible_host=192.168.1.165 mac=52:54:00:d1:22:9f

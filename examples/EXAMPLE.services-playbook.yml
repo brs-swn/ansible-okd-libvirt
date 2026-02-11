@@ -1,0 +1,6 @@
+--- # Master playbook for Services deployment
+- hosts: okd4_libvirt
+  become: yes
+  become_user: root
+  roles:
+    - ansible-okd-libvirt

@@ -1,0 +1,159 @@
+#!/bin/bash
+
+# CAUTION: This script is more of a reference, than a usable command.
+#
+# Prerequisits
+# Set up HAProxy, DNS and DHCP with fixed IP addreses for all nodes, 
+# configured through ansible on a service/bastion node.
+#
+# Set up a basic KVM hypervisor through ansible and configure SSH keys for
+# root on KVM and for apache user on the bastion host.
+#
+# This contents of this script is intended to be run from the KVM hypervisor.
+
+# STEP 0: Set Variables
+export SERVICE_NODE={{ service_node }}.{{ base_domain }}
+export ARCH=x86_64
+export IMGS=/var/lib/libvirt/images
+export VIRT_NET={{ virt_network_name }}
+export BASE_DOMAIN={{ base_domain }}
+
+export OKD_VERSION={{ okd_version }}
+export OKD_CLUSTER_NAME=okd4
+export OKD_DOWNLOAD=https://github.com/okd-project/okd/releases/download
+
+export SCOS_MAJ_VERS={{ scos_maj_vers }}
+export SCOS_VERS={{ scos_vers }}
+export SCOS_ISO=scos-${SCOS_VERS}-live-iso.x86_64.iso
+export SCOS_KERNEL=scos-${SCOS_VERS}-live-kernel.x86_64
+export SCOS_INITRD=scos-${SCOS_VERS}-live-initramfs.x86_64.img
+export SCOS_ROOTFS=scos-${SCOS_VERS}-live-rootfs.x86_64.img
+export SCOS_RAW=scos-${SCOS_VERS}-metal.x86_64.raw.gz
+export SCOS_DOWNLOAD=https://cloud.centos.org/centos/scos/${SCOS_MAJ_VERS}/prod/streams/${SCOS_VERS}/${ARCH}
+
+# STEP 1: Download OKD Installer and Client Tools
+cd /var/lib/libvirt/okd-install
+wget ${OKD_DOWNLOAD}/$OKD_VERSION/openshift-client-linux-$OKD_VERSION.tar.gz
+wget ${OKD_DOWNLOAD}/$OKD_VERSION/openshift-install-linux-$OKD_VERSION.tar.gz
+
+tar xvf openshift-client-linux-$OKD_VERSION.tar.gz
+tar xvf openshift-install-linux-$OKD_VERSION.tar.gz
+mv openshift-install oc kubectl /usr/local/bin/
+rm -f README.md
+
+oc version
+openshift-install version
+
+# STEP 2: Get CoreOS Images
+cd /var/lib/libvirt/images/OKD4
+ISO_URL=$(openshift-install coreos print-stream-json \
+  | jq . \
+  | grep location \
+  | grep $ARCH \
+  | grep iso \
+  | cut -d\" -f4)
+
+#wget ${ISO_URL}
+for D in SCOS_KERNEL SCOS_INITRD SCOS_ROOTFS SCOS_RAW SCOS_ISO; do
+ wget ${SCOS_DOWNLOAD}/${!D}
+done
+
+scp -i ~/.ssh/okd_rsa ${SCOS_RAW} ${SCOS_ROOTFS} \
+ apache@${SERVICE_NODE}.${BASE_DOMAIN}:/var/www/html/${OKD_CLUSTER_NAME}
+
+# STEP 3: Create Installation Configuration
+# NOTE: Since some of the Certificates have a life span of 1 day,
+# best to regenerate the ignitionfiles each time the cluster is 
+# deployed from scratch.
+#
+# {"auths":{"fake":{"auth":"aWQ6cGFzcwo="}}}
+cd /var/lib/libvirt/okd-install
+cp install-config-kvm.yaml install-config.yaml
+openshift-install create ignition-configs
+
+scp -i ~/.ssh/okd_rsa *.ign \
+  apache@${SERVICE_NODE}.${BASE_DOMAIN}:/var/www/html/${OKD_CLUSTER_NAME}
+
+# STEP 4: Launch VM's
+# NOTE: Each VM must be manually powered off when install is complete
+VM_LIST=( bootstrap master01 worker01 worker02 )
+declare -A bootstrap=(
+          [SERVER_ROLE]="bootstrap"
+          [SERVER_NAME]="bootstrap.${OKD_CLUSTER_NAME}.${BASE_DOMAIN}"
+          [SERVER_MAC]="52:54:00:b2:bb:f8"
+          [SERVER_IP]="192.168.1.161"
+        )
+declare -A master01=(
+          [SERVER_ROLE]="master"
+          [SERVER_NAME]="master01.${OKD_CLUSTER_NAME}.${BASE_DOMAIN}"
+          [SERVER_MAC]="52:54:00:16:56:0a"
+          [SERVER_IP]="192.168.1.162"
+        )
+declare -A master02=(
+          [SERVER_ROLE]="master"
+          [SERVER_NAME]="master02.${OKD_CLUSTER_NAME}.${BASE_DOMAIN}"
+          [SERVER_MAC]="52:54:00:1b:9a:8d"
+          [SERVER_IP]="192.168.1.163"
+        )
+declare -A worker01=(
+          [SERVER_ROLE]="worker"
+          [SERVER_NAME]="worker01.${OKD_CLUSTER_NAME}.${BASE_DOMAIN}"
+          [SERVER_MAC]="52:54:00:ce:87:f1"
+          [SERVER_IP]="192.168.1.164"
+        )
+declare -A worker02=(
+          [SERVER_ROLE]="worker"
+          [SERVER_NAME]="worker02.${OKD_CLUSTER_NAME}.${BASE_DOMAIN}"
+          [SERVER_MAC]="52:54:00:d1:22:9f"
+          [SERVER_IP]="192.168.1.165"
+        )
+
+for L in ${VM_LIST[@]}; do
+  # NOTE: Disable SELinux on the KVM hypervisor and in the OKD nodes.
+  declare -n VM=${L}
+
+  # Options for Booting
+  BOOT_KERNEL=${IMGS}/OKD4/${SCOS_KERNEL}
+  BOOT_INITRD=${IMGS}/OKD4/${SCOS_INITRD}
+  BOOT_ARGS="ip=dhcp rd.neednet=1 coreos.inst.install_dev=/dev/vda coreos.inst.image_url=http://192.168.1.10:80/${OKD_CLUSTER_NAME}/${SCOS_RAW} coreos.inst.ignition_url=http://192.168.1.10:80/${OKD_CLUSTER_NAME}/${VM[SERVER_ROLE]}.ign coreos.live.rootfs_url=http://192.168.1.10:80/${OKD_CLUSTER_NAME}/${SCOS_ROOTFS} coreos.inst.insecure selinux=0"
+
+  qemu-img create -f qcow2 ${IMGS}/${VM[SERVER_NAME]}.qcow2 20G
+  virt-install --name ${VM[SERVER_NAME]} \
+               --graphics vnc \
+               --noautoconsole \
+               --vcpus 1 \
+               --osinfo centos-stream${SCOS_MAJ_VERS} \
+               --ram 3072 \
+               --disk path=${IMGS}/${VM[SERVER_NAME]}.qcow2,device=disk \
+               --network network:${VIRT_NET},mac=${VM[SERVER_MAC]} \
+               --boot kernel=${BOOT_KERNEL},initrd=${BOOT_INITRD},kernel_args="${BOOT_ARGS}"
+done
+
+for L in ${VM_LIST[@]}; do
+  declare -n VM=${L}
+  # Delete the kernel, initrd and boot args
+  # This is a manual edit
+  virsh destroy ${VM[SERVER_NAME]}
+  virsh edit ${VM[SERVER_NAME]}
+done
+
+# Disable SE Linux:
+# - On boot - add selinux=0 to the kernel line
+# - Permanent 
+#   > grubby --update-kernel ALL --args selinux=0
+#   > sed -i 's|SELINUX=enforcing|SELINUX=disabled|g' /etc/selinux/config
+
+# STEP Clean-up: Remove Nodes and generated files
+# CAUTION: This tears down the cluster!
+# Destroy, undefine and remove disks
+for L in ${VM_LIST[@]}; do
+  declare -n VM=${L}
+  virsh destroy ${VM[SERVER_NAME]}
+  virsh undefine ${VM[SERVER_NAME]}
+  rm -rf /var/lib/libvirt/images/${VM[SERVER_NAME]}.qcow2
+done
+
+# Remove Ignition files
+cd /var/lib/libvirt/okd-install
+rm -rf auth *.ign *.json
+ssh -i ~/.ssh/okd_rsa apache@${SERVICE_NODE} "rm -f /var/www/html/${OKD_CLUSTER_NAME}/*.ign"

@@ -1,0 +1,37 @@
+#SPDX-License-Identifier: GPL-2.0-or-later
+---
+# Defaults file for OKD KVM
+# Override these in the global group_vars or vars/mainl.yml
+
+# Additional KVM RPMS
+dnf_packages:
+  - coreos-installer
+  - butane
+  - python3-lxml
+
+# Interface and Virtual Network
+# Interface IP is taken from ansible_host defined in the inventory hosts file.
+manage_virt_networks: False
+physical_interface: eth0
+bridge_device_name: okd4
+virt_network_name: okd4
+host_netmask: 255.255.255.0
+ip_gateway: 192.168.1.1
+search_domain: your.tld
+dns_list:
+  - 1.1.1.1
+  - 1.0.0.1
+
+# OKD Versions
+okd_version: 4.20.0-okd-scos.14
+scos_maj_vers: 10
+scos_vers: 10.0.20250628-0
+
+# OKD Configuration
+base_domain: your.tld
+service_node: service
+cluster_name: okd4
+cluster_network: 10.1.0.0/16
+service_network: 172.30.0.0/16
+machine_network: 10.0.0.0/24
+ssh_key: 'yourpublickeygoeshere== okd@key'

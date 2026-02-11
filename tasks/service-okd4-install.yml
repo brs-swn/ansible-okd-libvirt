@@ -1,0 +1,24 @@
+# This deploys the OKD Libvirt files.
+
+- name: Create OKD Libvirt Directories
+  file:
+    path: "/var/lib/libvirt/{{ item }}"
+    state: directory
+    mode: 0775
+    owner: qemu
+    group: qemu
+  with_items:
+    - scripts
+    - okd-install
+    - images/OKD4
+
+- name: Copy OKD Files and Scriopts
+  ansible.builtin.template:
+    src: "okd_config/{{ item.name }}.j2"
+    dest: "/var/lib/libvirt/{{ item.path }}/{{ item.name }}"
+    owner: ansible
+    group: ansible
+    mode: 0775
+  with_items:
+    - { name: "OKD-KVM-scos.sh", path: "scripts" }
+    - { name: "install-config-kvm.yaml", path: "okd-install" }

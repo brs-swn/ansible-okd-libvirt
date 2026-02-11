@@ -1,0 +1,24 @@
+- name: Restart Network
+  service:
+    name=network.target
+    state=restarted
+
+- name: Start Libvirt Services
+  service:
+    name={{ item }}
+    enabled=true
+    state=restarted
+  with_items:
+    - virtinterfaced.service
+    - virtlockd.service
+    - virtlogd.service
+    - virtnetworkd.service
+    - virtnodedevd.service
+    - virtnwfilterd.service
+    - virtqemud.service
+    - virtsecretd.service
+    - virtstoraged.service
+  when: ((ansible_facts['distribution'] == "RedHat" and 
+          ansible_facts['distribution_major_version'] >= "9") or
+         (ansible_facts['distribution'] == "Fedora" and 
+          ansible_facts['distribution_major_version'] >= "41")

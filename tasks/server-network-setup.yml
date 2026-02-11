@@ -1,0 +1,57 @@
+# Please see README_INTERFACE for CLI commands
+---
+- name: IP/Netmask
+  set_fact:
+    ip_netmask: "{{ ansible_host }}/{{ host_netmask }}"
+
+- name: Print the IPAddr Net
+  debug:
+    msg: "{{ ip_netmask | ansible.utils.ipaddr('host/prefix') }}"
+
+- name: Create Bridge Master
+  community.general.nmcli:
+    type: bridge
+    conn_name: "{{ bridge_device_name }}"
+    ifname: "{{ bridge_device_name }}"
+    method4: manual
+    ip4: "{{ ip_netmask | ansible.utils.ipaddr('host/prefix') }}"
+    gw4: "{{ ip_gateway }}"
+    state: present
+
+- name: Create Bridge Slave
+  community.general.nmcli:
+    type: bridge-slave
+    slave_type: bridge
+    conn_name: "{{ bridge_device_name }}-slave"
+    ifname: "{{ physical_interface }}"
+    master: "{{ bridge_device_name }}"
+    state: present
+
+- name: Modify Bridge Master
+  community.general.nmcli:
+    type: bridge
+    conn_name: "{{ bridge_device_name }}"
+    ifname: "{{ bridge_device_name }}"
+    dns4: "{{ dns_list | join(',') }}"
+    dns4_search: "{{ search_domain }}"
+    conn_reload: true
+    state: present
+
+- name: Test for Bridge Master
+  ansible.builtin.command: nmcli con sh {{ bridge_device_name }}
+  register: bridge_master
+  ignore_errors: True
+- name: Test for Bridge Slave
+  ansible.builtin.command: nmcli con sh {{ bridge_device_name }}-slave
+  register: bridge_slave
+  ignore_errors: True
+- name: Test for Device Connection
+  ansible.builtin.command: nmcli con sh {{ physical_interface }}
+  register: device_connection
+  ignore_errors: True
+
+- name: Delete Physical Connection
+  ansible.builtin.command: nmcli con del {{ physical_interface }}
+  when: bridge_master.rc == 0 and 
+        bridge_slave.rc == 0 and
+        device_connection.rc == 0

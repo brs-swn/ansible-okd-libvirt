@@ -1,0 +1,25 @@
+---
+apiVersion: v1
+baseDomain: {{ base_domain }}
+metadata:
+  name: {{ cluster_name }}
+controlPlane:
+  name: master
+  replicas: 2
+  hyperthreading: Enabled
+compute:
+  - name: worker
+    replicas: 2
+    hyperthreading: Enabled
+networking:
+  networkType: OVNKubernetes
+  machineCIDR: {{ machine_network }}
+  clusterNetwork:
+  - cidr: {{ cluster_network }}
+    hostPrefix: 24
+  serviceNetwork:
+  - {{ service_network }}
+platform:
+  none: {}
+pullSecret: '{"auths":{"fake":{"auth":"aWQ6cGFzcwo="}}}'
+sshKey: '{{ ssh_key }}'

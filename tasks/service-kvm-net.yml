@@ -1,0 +1,31 @@
+---
+# NOTICE: python3-lxml needs to be installed on the target host.
+
+- name: Remove Default Virt Network for Root Context
+  virt_net:
+    state: absent
+    name: default
+  when: manage_virt_networks
+
+- name: Setup virt network for Root Context
+  virt_net:
+    name: "{{ virt_network_name }}"
+    command: define
+    xml: '{{ lookup("template", "libvirt_config/bridge.xml.j2") }}'
+  when: manage_virt_networks
+
+- name: Start virt network for Root Context
+  virt_net:
+    name: "{{ virt_network_name }}"
+    state: active
+    autostart: True
+  when: manage_virt_networks
+
+- name: Configuring QEMU
+  template:
+    src=libvirt_config/bridge.conf.j2
+    dest=/etc/qemu/bridge.conf
+    owner=root
+    group=root
+    mode=0644
+  when: manage_virt_networks
