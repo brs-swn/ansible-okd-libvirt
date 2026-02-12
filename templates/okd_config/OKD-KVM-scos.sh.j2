@@ -11,8 +11,70 @@
 #
 # This contents of this script is intended to be run from the KVM hypervisor.
 
+# STEP -1: Make this script usable.
+GET_ARGS=true
+OKD_BOOTSTRAP=false
+OKD_DESTROY=false
+OKD_MANUAL_EDIT=false
+OKD_UPLOAD=false
+OKD_VERBOSE=false
+
+USAGE="
+$0 [OPTION]
+  -b|--bootstrap        Bootstrap OKD4 on KVM
+  -d|--destory          Destroy OKD4 cluster and clean-up.
+  -e|--edit             Shuts down the cluster nodes and launch virsh editor.
+  -u|--upload           Upload files to Services node. (optional)
+  -v|--verbose		Print status messages. (optional)
+"
+while [ "${GET_ARGS}" == "true" ]; do
+  case $1 in
+    -b|--bootstrap)
+      OKD_BOOTSTRAP=true; shift
+      ;;
+    -d|--destroy)
+      OKD_DESTROY=true; shift
+      ;;
+    -e|--edit)
+      OKD_MANUAL_EDIT=true; shift
+      ;;
+    -u|--upload)
+      OKD_UPLOAD=true; shift
+      ;;
+    -v|--verbose)
+      OKD_VERBOSE=true; shift
+      ;;
+    *)
+      if [ "$#" -ne "0" ]; then
+        echo "Unkown Argument: $1"
+        echo "Usage: $USAGE"
+        exit 1
+      else
+        GET_ARGS=false
+      fi
+      ;;
+   esac
+done
+
+# Hacky and wordy way to test mutual exclusivity of three variables.
+if [[ "${OKD_BOOTSTRAP}" == "true" && "${OKD_DESTROY}" == "true" ]] ||
+   [[ "${OKD_BOOTSTRAP}" == "true" && "${OKD_MANUAL_EDIT}" == "true" ]] ||
+   [[ "${OKD_MANUAL_EDIT}" == "true" && "${OKD_DESTROY}" == "true" ]] ; then
+  echo "Bootstrap, Edit and Destroy options are mutually exclusive."
+  echo "Usage: $USAGE"
+  exit 1
+elif [ "${OKD_BOOTSTRAP}" == "false" ] && [ "${OKD_DESTROY}" == "false" ] &&
+     [ "${OKD_MANUAL_EDIT}" == "false" ]; then
+  echo "One of Bootstrap (-b), Edit (-e) or Destroy (-d) options must be provided."
+  echo "Usage: $USAGE"
+  exit 1
+fi
+
 # STEP 0: Set Variables
-export SERVICE_NODE={{ service_node }}.{{ base_domain }}
+[ "${OKD_VERBOSE}" == "true" ] && echo "Setting up Variables . . . "
+{% set service_fqdn = service_node + '.' + base_domain -%}
+export SERVICE_NODE={{ service_fqdn }}
+export SERVICE_IP={{ hostvars[service_fqdn].ansible_host }}
 export ARCH=x86_64
 export IMGS=/var/lib/libvirt/images
 export VIRT_NET={{ virt_network_name }}
@@ -31,18 +93,41 @@ export SCOS_ROOTFS=scos-${SCOS_VERS}-live-rootfs.x86_64.img
 export SCOS_RAW=scos-${SCOS_VERS}-metal.x86_64.raw.gz
 export SCOS_DOWNLOAD=https://cloud.centos.org/centos/scos/${SCOS_MAJ_VERS}/prod/streams/${SCOS_VERS}/${ARCH}
 
+# Node Definitions
+# This is a rendered list from the Ansible Inventory Hosts file.
+[ "${OKD_VERBOSE}" == "true" ] && echo "Setting up Node Variables . . . "
+VM_LIST=()
+{% for host in groups['okd4_bootstrap'] + groups['okd4_master'] + groups['okd4_worker'] %}
+{%- set host_role = host.split('.')[0] | regex_replace ("[0-9]","") -%}
+declare -A {{ host.split('.')[0] }}=(
+          [SERVER_ROLE]="{{ host_role }}"
+          [SERVER_NAME]="{{ host }}"
+          [SERVER_MAC]="{{ hostvars[host].mac }}"
+          [SERVER_IP]="{{ hostvars[host].ansible_host }}"
+        )
+VM_LIST=( ${VM_LIST[@]} {{ host.split('.')[0] }} )
+
+{% endfor %}
+
 # STEP 1: Download OKD Installer and Client Tools
-cd /var/lib/libvirt/okd-install
-wget ${OKD_DOWNLOAD}/$OKD_VERSION/openshift-client-linux-$OKD_VERSION.tar.gz
-wget ${OKD_DOWNLOAD}/$OKD_VERSION/openshift-install-linux-$OKD_VERSION.tar.gz
+if [ ! -x /usr/local/bin/openshift-install ] ||
+   [ ! -x /usr/local/bin/oc ] ||
+   [ ! -x /usr/local/bin/kubectl ]; then
 
-tar xvf openshift-client-linux-$OKD_VERSION.tar.gz
-tar xvf openshift-install-linux-$OKD_VERSION.tar.gz
-mv openshift-install oc kubectl /usr/local/bin/
-rm -f README.md
+  [ "${OKD_VERBOSE}" == "true" ] && echo "Installing OKD tools . . . "
 
-oc version
-openshift-install version
+  cd /var/lib/libvirt/okd-install
+  wget ${OKD_DOWNLOAD}/$OKD_VERSION/openshift-client-linux-$OKD_VERSION.tar.gz
+  wget ${OKD_DOWNLOAD}/$OKD_VERSION/openshift-install-linux-$OKD_VERSION.tar.gz
+
+  tar xvf openshift-client-linux-$OKD_VERSION.tar.gz
+  tar xvf openshift-install-linux-$OKD_VERSION.tar.gz
+  mv openshift-install oc kubectl /usr/local/bin/
+  rm -f README.md
+fi
+
+[ "${OKD_VERBOSE}" == "true" ] && oc version
+[ "${OKD_VERBOSE}" == "true" ] && openshift-install version; echo
 
 # STEP 2: Get CoreOS Images
 cd /var/lib/libvirt/images/OKD4
@@ -53,13 +138,18 @@ ISO_URL=$(openshift-install coreos print-stream-json \
   | grep iso \
   | cut -d\" -f4)
 
-#wget ${ISO_URL}
 for D in SCOS_KERNEL SCOS_INITRD SCOS_ROOTFS SCOS_RAW SCOS_ISO; do
- wget ${SCOS_DOWNLOAD}/${!D}
+  if [ ! -f ${!D} ]; then
+    [ "${OKD_VERBOSE}" == "true" ] && echo "Downloading ${!D} . . . "
+    wget ${SCOS_DOWNLOAD}/${!D}
+  fi
 done
 
-scp -i ~/.ssh/okd_rsa ${SCOS_RAW} ${SCOS_ROOTFS} \
- apache@${SERVICE_NODE}.${BASE_DOMAIN}:/var/www/html/${OKD_CLUSTER_NAME}
+if [ "${OKD_UPLOAD}" == "true" ]; then
+  [ "${OKD_VERBOSE}" == "true" ] && echo "Upload images to service node . . . "
+  scp -i ~/.ssh/okd_rsa ${SCOS_RAW} ${SCOS_ROOTFS} \
+   apache@${SERVICE_NODE}.${BASE_DOMAIN}:/var/www/html/${OKD_CLUSTER_NAME}
+fi
 
 # STEP 3: Create Installation Configuration
 # NOTE: Since some of the Certificates have a life span of 1 day,
@@ -67,93 +157,82 @@ scp -i ~/.ssh/okd_rsa ${SCOS_RAW} ${SCOS_ROOTFS} \
 # deployed from scratch.
 #
 # {"auths":{"fake":{"auth":"aWQ6cGFzcwo="}}}
-cd /var/lib/libvirt/okd-install
-cp install-config-kvm.yaml install-config.yaml
-openshift-install create ignition-configs
 
-scp -i ~/.ssh/okd_rsa *.ign \
-  apache@${SERVICE_NODE}.${BASE_DOMAIN}:/var/www/html/${OKD_CLUSTER_NAME}
+if [ "${OKD_BOOTSTRAP}" == "true" ]; then
+  [ "${OKD_VERBOSE}" == "true" ] && echo "Creating Ignition Configs . . . "
+  cd /var/lib/libvirt/okd-install
+  cp install-config-kvm.yaml install-config.yaml
+  openshift-install create ignition-configs
+
+  [ "${OKD_VERBOSE}" == "true" ] && echo "Uploading Ignition Configs . . . "
+  scp -i ~/.ssh/okd_rsa *.ign \
+    apache@${SERVICE_NODE}.${BASE_DOMAIN}:/var/www/html/${OKD_CLUSTER_NAME}
+fi
 
 # STEP 4: Launch VM's
 # NOTE: Each VM must be manually powered off when install is complete
-VM_LIST=( bootstrap master01 worker01 worker02 )
-declare -A bootstrap=(
-          [SERVER_ROLE]="bootstrap"
-          [SERVER_NAME]="bootstrap.${OKD_CLUSTER_NAME}.${BASE_DOMAIN}"
-          [SERVER_MAC]="52:54:00:b2:bb:f8"
-          [SERVER_IP]="192.168.1.161"
-        )
-declare -A master01=(
-          [SERVER_ROLE]="master"
-          [SERVER_NAME]="master01.${OKD_CLUSTER_NAME}.${BASE_DOMAIN}"
-          [SERVER_MAC]="52:54:00:16:56:0a"
-          [SERVER_IP]="192.168.1.162"
-        )
-declare -A master02=(
-          [SERVER_ROLE]="master"
-          [SERVER_NAME]="master02.${OKD_CLUSTER_NAME}.${BASE_DOMAIN}"
-          [SERVER_MAC]="52:54:00:1b:9a:8d"
-          [SERVER_IP]="192.168.1.163"
-        )
-declare -A worker01=(
-          [SERVER_ROLE]="worker"
-          [SERVER_NAME]="worker01.${OKD_CLUSTER_NAME}.${BASE_DOMAIN}"
-          [SERVER_MAC]="52:54:00:ce:87:f1"
-          [SERVER_IP]="192.168.1.164"
-        )
-declare -A worker02=(
-          [SERVER_ROLE]="worker"
-          [SERVER_NAME]="worker02.${OKD_CLUSTER_NAME}.${BASE_DOMAIN}"
-          [SERVER_MAC]="52:54:00:d1:22:9f"
-          [SERVER_IP]="192.168.1.165"
-        )
 
-for L in ${VM_LIST[@]}; do
-  # NOTE: Disable SELinux on the KVM hypervisor and in the OKD nodes.
-  declare -n VM=${L}
+if [ "${OKD_BOOTSTRAP}" == "true" ]; then
+  for L in ${VM_LIST[@]}; do
+    [ "${OKD_VERBOSE}" == "true" ] && echo "Launching OKD Node ${L} . . . "
+    # NOTE: Disable SELinux on the KVM hypervisor and in the OKD nodes.
+    declare -n VM=${L}
 
-  # Options for Booting
-  BOOT_KERNEL=${IMGS}/OKD4/${SCOS_KERNEL}
-  BOOT_INITRD=${IMGS}/OKD4/${SCOS_INITRD}
-  BOOT_ARGS="ip=dhcp rd.neednet=1 coreos.inst.install_dev=/dev/vda coreos.inst.image_url=http://192.168.1.10:80/${OKD_CLUSTER_NAME}/${SCOS_RAW} coreos.inst.ignition_url=http://192.168.1.10:80/${OKD_CLUSTER_NAME}/${VM[SERVER_ROLE]}.ign coreos.live.rootfs_url=http://192.168.1.10:80/${OKD_CLUSTER_NAME}/${SCOS_ROOTFS} coreos.inst.insecure selinux=0"
+    # Options for Booting
+    BOOT_KERNEL=${IMGS}/OKD4/${SCOS_KERNEL}
+    BOOT_INITRD=${IMGS}/OKD4/${SCOS_INITRD}
+    BOOT_ARGS="ip=dhcp rd.neednet=1 coreos.inst.install_dev=/dev/vda coreos.inst.image_url=http://${SERVICE_IP}:80/${OKD_CLUSTER_NAME}/${SCOS_RAW} coreos.inst.ignition_url=http://${SERVICE_IP}:80/${OKD_CLUSTER_NAME}/${VM[SERVER_ROLE]}.ign coreos.live.rootfs_url=http://${SERVICE_IP}:80/${OKD_CLUSTER_NAME}/${SCOS_ROOTFS} coreos.inst.insecure selinux=0"
 
-  qemu-img create -f qcow2 ${IMGS}/${VM[SERVER_NAME]}.qcow2 20G
-  virt-install --name ${VM[SERVER_NAME]} \
-               --graphics vnc \
-               --noautoconsole \
-               --vcpus 1 \
-               --osinfo centos-stream${SCOS_MAJ_VERS} \
-               --ram 3072 \
-               --disk path=${IMGS}/${VM[SERVER_NAME]}.qcow2,device=disk \
-               --network network:${VIRT_NET},mac=${VM[SERVER_MAC]} \
-               --boot kernel=${BOOT_KERNEL},initrd=${BOOT_INITRD},kernel_args="${BOOT_ARGS}"
-done
+    qemu-img create -f qcow2 ${IMGS}/${VM[SERVER_NAME]}.qcow2 20G
+    virt-install --name ${VM[SERVER_NAME]} \
+                 --graphics vnc \
+                 --noautoconsole \
+                 --vcpus 1 \
+                 --osinfo centos-stream${SCOS_MAJ_VERS} \
+                 --ram 3072 \
+                 --disk path=${IMGS}/${VM[SERVER_NAME]}.qcow2,device=disk \
+                 --network network:${VIRT_NET},mac=${VM[SERVER_MAC]} \
+                 --boot kernel=${BOOT_KERNEL},initrd=${BOOT_INITRD},kernel_args="${BOOT_ARGS}"
+  done
+fi
 
-for L in ${VM_LIST[@]}; do
-  declare -n VM=${L}
-  # Delete the kernel, initrd and boot args
-  # This is a manual edit
-  virsh destroy ${VM[SERVER_NAME]}
-  virsh edit ${VM[SERVER_NAME]}
-done
+# This section needs to be done manually
+if [ "${OKD_MANUAL_EDIT}" == "true" ]; then
+  for L in ${VM_LIST[@]}; do
+    [ "${OKD_VERBOSE}" == "true" ] && echo "Shutting down ${L} . . . "
+    declare -n VM=${L}
+    # This is a manual edit
+    # Delete the kernel, initrd and boot args
+    virsh destroy ${VM[SERVER_NAME]}
+    virsh edit ${VM[SERVER_NAME]}
+  done
 
-# Disable SE Linux:
-# - On boot - add selinux=0 to the kernel line
-# - Permanent 
-#   > grubby --update-kernel ALL --args selinux=0
-#   > sed -i 's|SELINUX=enforcing|SELINUX=disabled|g' /etc/selinux/config
+  echo "NOTICE:
+     When each node comes back up, disable SE Linux:
+     - On boot - add selinux=0 to the kernel line
+     - Permanent 
+       > grubby --update-kernel ALL --args selinux=0
+       > sed -i 's|SELINUX=enforcing|SELINUX=disabled|g' /etc/selinux/config
+  "
+fi
 
 # STEP Clean-up: Remove Nodes and generated files
 # CAUTION: This tears down the cluster!
-# Destroy, undefine and remove disks
-for L in ${VM_LIST[@]}; do
-  declare -n VM=${L}
-  virsh destroy ${VM[SERVER_NAME]}
-  virsh undefine ${VM[SERVER_NAME]}
-  rm -rf /var/lib/libvirt/images/${VM[SERVER_NAME]}.qcow2
-done
 
-# Remove Ignition files
-cd /var/lib/libvirt/okd-install
-rm -rf auth *.ign *.json
-ssh -i ~/.ssh/okd_rsa apache@${SERVICE_NODE} "rm -f /var/www/html/${OKD_CLUSTER_NAME}/*.ign"
+if [ "${OKD_DESTROY}" == "true" ]; then
+  # Destroy, undefine and remove disks
+  [ "${OKD_VERBOSE}" == "true" ] && echo "Terminating nodes . . . "
+  for L in ${VM_LIST[@]}; do
+    [ "${OKD_VERBOSE}" == "true" ] && echo "Clean-up for Node ${L} . . . "
+    declare -n VM=${L}
+    virsh destroy ${VM[SERVER_NAME]}
+    virsh undefine ${VM[SERVER_NAME]}
+    rm -rf /var/lib/libvirt/images/${VM[SERVER_NAME]}.qcow2
+  done
+
+  # Remove Ignition files
+  [ "${OKD_VERBOSE}" == "true" ] && echo "Removing Ignition Files . . . "
+  cd /var/lib/libvirt/okd-install
+  rm -rf auth *.ign *.json .openshift*
+  ssh -i ~/.ssh/okd_rsa apache@${SERVICE_NODE} "rm -f /var/www/html/${OKD_CLUSTER_NAME}/*.ign"
+fi
