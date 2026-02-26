@@ -15,7 +15,7 @@
 GET_ARGS=true
 OKD_BOOTSTRAP=false
 OKD_DESTROY=false
-OKD_MANUAL_EDIT=false
+OKD_RESTART=false
 OKD_UPLOAD=false
 OKD_VERBOSE=false
 
@@ -23,7 +23,7 @@ USAGE="
 $0 [OPTION]
   -b|--bootstrap        Bootstrap OKD4 on KVM
   -d|--destory          Destroy OKD4 cluster and clean-up.
-  -e|--edit             Shuts down the cluster nodes and launch virsh editor.
+  -r|--restart          Shuts down and modifies the cluster nodes after install.
   -u|--upload           Upload files to Services node. (optional)
   -v|--verbose		Print status messages. (optional)
 "
@@ -35,8 +35,8 @@ while [ "${GET_ARGS}" == "true" ]; do
     -d|--destroy)
       OKD_DESTROY=true; shift
       ;;
-    -e|--edit)
-      OKD_MANUAL_EDIT=true; shift
+    -r|--restart)
+      OKD_RESTART=true; shift
       ;;
     -u|--upload)
       OKD_UPLOAD=true; shift
@@ -58,13 +58,13 @@ done
 
 # Hacky and wordy way to test mutual exclusivity of three variables.
 if [[ "${OKD_BOOTSTRAP}" == "true" && "${OKD_DESTROY}" == "true" ]] ||
-   [[ "${OKD_BOOTSTRAP}" == "true" && "${OKD_MANUAL_EDIT}" == "true" ]] ||
-   [[ "${OKD_MANUAL_EDIT}" == "true" && "${OKD_DESTROY}" == "true" ]] ; then
+   [[ "${OKD_BOOTSTRAP}" == "true" && "${OKD_RESTART}" == "true" ]] ||
+   [[ "${OKD_RESTART}" == "true" && "${OKD_DESTROY}" == "true" ]] ; then
   echo "Bootstrap, Edit and Destroy options are mutually exclusive."
   echo "Usage: $USAGE"
   exit 1
 elif [ "${OKD_BOOTSTRAP}" == "false" ] && [ "${OKD_DESTROY}" == "false" ] &&
-     [ "${OKD_MANUAL_EDIT}" == "false" ]; then
+     [ "${OKD_RESTART}" == "false" ]; then
   echo "One of Bootstrap (-b), Edit (-e) or Destroy (-d) options must be provided."
   echo "Usage: $USAGE"
   exit 1
@@ -77,6 +77,7 @@ export SERVICE_NODE={{ service_fqdn }}
 export SERVICE_IP={{ hostvars[service_fqdn].ansible_host }}
 export ARCH=x86_64
 export IMGS=/var/lib/libvirt/images
+export VIRT_XML=/etc/libvirt/qemu
 export VIRT_NET={{ virt_network_name }}
 export BASE_DOMAIN={{ base_domain }}
 
@@ -148,7 +149,7 @@ done
 if [ "${OKD_UPLOAD}" == "true" ]; then
   [ "${OKD_VERBOSE}" == "true" ] && echo "Upload images to service node . . . "
   scp -i ~/.ssh/okd_rsa ${SCOS_RAW} ${SCOS_ROOTFS} \
-   apache@${SERVICE_NODE}.${BASE_DOMAIN}:/var/www/html/${OKD_CLUSTER_NAME}
+   apache@${SERVICE_NODE}:/var/www/html/${OKD_CLUSTER_NAME}
 fi
 
 # STEP 3: Create Installation Configuration
@@ -166,7 +167,7 @@ if [ "${OKD_BOOTSTRAP}" == "true" ]; then
 
   [ "${OKD_VERBOSE}" == "true" ] && echo "Uploading Ignition Configs . . . "
   scp -i ~/.ssh/okd_rsa *.ign \
-    apache@${SERVICE_NODE}.${BASE_DOMAIN}:/var/www/html/${OKD_CLUSTER_NAME}
+    apache@${SERVICE_NODE}:/var/www/html/${OKD_CLUSTER_NAME}
 fi
 
 # STEP 4: Launch VM's
@@ -179,41 +180,79 @@ if [ "${OKD_BOOTSTRAP}" == "true" ]; then
     declare -n VM=${L}
 
     # Options for Booting
+    BOOT_MEM=1024
+    DISK_SIZE=100G
+    VCPUS=1
     BOOT_KERNEL=${IMGS}/OKD4/${SCOS_KERNEL}
     BOOT_INITRD=${IMGS}/OKD4/${SCOS_INITRD}
     BOOT_ARGS="ip=dhcp rd.neednet=1 coreos.inst.install_dev=/dev/vda coreos.inst.image_url=http://${SERVICE_IP}:80/${OKD_CLUSTER_NAME}/${SCOS_RAW} coreos.inst.ignition_url=http://${SERVICE_IP}:80/${OKD_CLUSTER_NAME}/${VM[SERVER_ROLE]}.ign coreos.live.rootfs_url=http://${SERVICE_IP}:80/${OKD_CLUSTER_NAME}/${SCOS_ROOTFS} coreos.inst.insecure selinux=0"
 
-    qemu-img create -f qcow2 ${IMGS}/${VM[SERVER_NAME]}.qcow2 20G
+    # Set Memory Size Based on Server Role
+    case ${VM[SERVER_ROLE]} in
+      bootstrap)
+        BOOT_MEM=3072;
+        DISK_SIZE=200G;
+        VCPUS=1;
+        ;;
+      master)
+        BOOT_MEM=24576;
+        DISK_SIZE=400G;
+        VCPUS=2;
+        ;;
+      worker)
+        BOOT_MEM=3072;
+        DISK_SIZE=200G;
+        VCPUS=2;
+        ;;
+      *)
+        exit 1 && echo "Unkown node type."
+        ;;
+    esac
+
+    qemu-img create -f qcow2 ${IMGS}/${VM[SERVER_NAME]}.qcow2 ${DISK_SIZE}
     virt-install --name ${VM[SERVER_NAME]} \
                  --graphics vnc \
                  --noautoconsole \
-                 --vcpus 1 \
+                 --autostart \
+                 --vcpus ${VCPUS} \
                  --osinfo centos-stream${SCOS_MAJ_VERS} \
-                 --ram 3072 \
+                 --ram ${BOOT_MEM} \
                  --disk path=${IMGS}/${VM[SERVER_NAME]}.qcow2,device=disk \
                  --network network:${VIRT_NET},mac=${VM[SERVER_MAC]} \
                  --boot kernel=${BOOT_KERNEL},initrd=${BOOT_INITRD},kernel_args="${BOOT_ARGS}"
   done
 fi
 
-# This section needs to be done manually
-if [ "${OKD_MANUAL_EDIT}" == "true" ]; then
+# When the install is complete, the OKD node will reboot to install again.
+# At that time, OKD restart needs to happen to modify the boot options
+# of the node so that it boots from disk.
+if [ "${OKD_RESTART}" == "true" ]; then
   for L in ${VM_LIST[@]}; do
     [ "${OKD_VERBOSE}" == "true" ] && echo "Shutting down ${L} . . . "
     declare -n VM=${L}
-    # This is a manual edit
-    # Delete the kernel, initrd and boot args
     virsh destroy ${VM[SERVER_NAME]}
+
+    echo "NOTICE: Delete the kernel, initrd and cmdline args."
+    sleep 5
     virsh edit ${VM[SERVER_NAME]}
+
   done
 
-  echo "NOTICE:
-     When each node comes back up, disable SE Linux:
-     - On boot - add selinux=0 to the kernel line
-     - Permanent 
-       > grubby --update-kernel ALL --args selinux=0
-       > sed -i 's|SELINUX=enforcing|SELINUX=disabled|g' /etc/selinux/config
-  "
+  # Starting each node after ALL nodes have been modified.
+  for L in ${VM_LIST[@]}; do
+    [ "${OKD_VERBOSE}" == "true" ] && echo "Starting ${L} . . . "
+    declare -n VM=${L}
+    virsh start ${VM[SERVER_NAME]}
+
+    echo "NOTICE:
+      When each node comes back up, disable SE Linux:
+        - On boot - add selinux=0 to the kernel line
+        - Permanent 
+          > grubby --update-kernel ALL --args selinux=0
+          > sed -i 's|SELINUX=enforcing|SELINUX=disabled|g' /etc/selinux/config
+    "
+    sleep 30
+  done
 fi
 
 # STEP Clean-up: Remove Nodes and generated files

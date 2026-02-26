@@ -23,7 +23,7 @@ dns_list:
   - 1.0.0.1
 
 # OKD Versions
-okd_version: 4.20.0-okd-scos.14
+okd_version: 4.21.0-okd-scos.5
 scos_maj_vers: 10
 scos_vers: 10.0.20250628-0
 
@@ -35,3 +35,4 @@ cluster_network: 10.1.0.0/16
 service_network: 172.30.0.0/16
 machine_network: 10.0.0.0/24
 ssh_key: 'yourpublickeygoeshere== okd@key'
+pull_secret: '{"auths":{"fake":{"auth":"aWQ6cGFzcwo="}}}'

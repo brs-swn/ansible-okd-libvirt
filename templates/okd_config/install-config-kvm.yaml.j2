@@ -9,11 +9,10 @@ controlPlane:
   hyperthreading: Enabled
 compute:
   - name: worker
-    replicas: 2
+    replicas: 0
     hyperthreading: Enabled
 networking:
   networkType: OVNKubernetes
-  machineCIDR: {{ machine_network }}
   clusterNetwork:
   - cidr: {{ cluster_network }}
     hostPrefix: 24
@@ -21,5 +20,25 @@ networking:
   - {{ service_network }}
 platform:
   none: {}
-pullSecret: '{"auths":{"fake":{"auth":"aWQ6cGFzcwo="}}}'
+pullSecret: '{{ pull_secret }}'
 sshKey: '{{ ssh_key }}'
+capabilities:
+  baselineCapabilitySet: None
+  additionalEnabledCapabilities:
+  - baremetal
+  - MachineAPI                 # Mandatory with "baremetal"
+  - marketplace
+  - OperatorLifecycleManager
+  - OperatorLifecycleManagerV1 # 4.18
+  - Console
+  - CSISnapshot
+  - NodeTuning
+  - Ingress                    # 4.16
+  #- Storage
+  #- openshift-samples
+  #- ImageRegistry
+  #- Build
+  #- DeploymentConfig
+  #- CloudCredential
+  #- CloudControllerManager
+  #- Insights                  # OKD is disconnected from RH
