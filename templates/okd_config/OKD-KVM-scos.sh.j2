@@ -16,6 +16,7 @@ GET_ARGS=true
 OKD_BOOTSTRAP=false
 OKD_DESTROY=false
 OKD_RESTART=false
+OKD_TOOLS=false
 OKD_UPLOAD=false
 OKD_VERBOSE=false
 
@@ -24,7 +25,8 @@ $0 [OPTION]
   -b|--bootstrap        Bootstrap OKD4 on KVM
   -d|--destory          Destroy OKD4 cluster and clean-up.
   -r|--restart          Shuts down and modifies the cluster nodes after install.
-  -u|--upload           Upload files to Services node. (optional)
+  -t|--tools		Download and install OKD tools.
+  -u|--upload           Upload images to Services node. (optional)
   -v|--verbose		Print status messages. (optional)
 "
 while [ "${GET_ARGS}" == "true" ]; do
@@ -37,6 +39,9 @@ while [ "${GET_ARGS}" == "true" ]; do
       ;;
     -r|--restart)
       OKD_RESTART=true; shift
+      ;;
+    -t|--tools)
+      OKD_TOOLS=true; shift
       ;;
     -u|--upload)
       OKD_UPLOAD=true; shift
@@ -113,7 +118,15 @@ VM_LIST=( ${VM_LIST[@]} {{ host.split('.')[0] }} )
 # STEP 1: Download OKD Installer and Client Tools
 if [ ! -x /usr/local/bin/openshift-install ] ||
    [ ! -x /usr/local/bin/oc ] ||
-   [ ! -x /usr/local/bin/kubectl ]; then
+   [ ! -x /usr/local/bin/kubectl ] ||
+   [ "${OKD_TOOLS}" == "true" ]; then
+
+  # Clean up anything residual from a previous install.
+  rm -rf /usr/local/bin/openshift-install \
+         /usr/local/bin/oc \
+         /usr/local/bin/kubectl \
+         openshift-client-linux-*.tar.gz \
+         openshift-install-linux-*.tar.gz
 
   [ "${OKD_VERBOSE}" == "true" ] && echo "Installing OKD tools . . . "
 

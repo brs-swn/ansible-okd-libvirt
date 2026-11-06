@@ -23,9 +23,11 @@ dns_list:
   - 1.0.0.1
 
 # OKD Versions
-okd_version: 4.21.0-okd-scos.5
+okd_version: 4.21.0-okd-scos.7
 scos_maj_vers: 10
 scos_vers: 10.0.20250628-0
+#fcos_maj_vers: 43
+#fcos_vers: 43.20260202.3.1
 
 # OKD Configuration
 base_domain: your.tld
