@@ -1,0 +1,23 @@
+export CICD_ISO_VERS={{ fc_iso_vers }}
+export CICD_ISO_REL={{ fc_iso_rel }}
+export CICD_ISO=Fedora-Server-dvd-x86_64-${CICD_ISO_VERS}-${CICD_ISO_REL}.iso
+export CICD_NETWORK={{ virt_network_name }}
+
+VM_ATTR=( SERVER_NAME SERVER_MAC SERVER_MEM SERVER_DISK )
+VM_LIST=( 
+{% for host in groups['cicd'] %}
+{% if hostvars[host]['mac'] is defined %}
+  {{ host.split('.')[0] }}
+{% endif %}
+{% endfor %}
+)
+{% for host in groups['cicd'] %}
+{% if hostvars[host]['mac'] is defined %}
+declare -A {{ host.split('.')[0] }}=(
+          [SERVER_NAME]="{{ host }}"
+          [SERVER_MAC]="{{ hostvars[host]['mac'] }}"
+          [SERVER_MEM]="{{ hostvars[host]['memory'] }}"
+          [SERVER_DISK]="{{ hostvars[host]['disk'] }}"
+	)
+{% endif %}
+{% endfor %}

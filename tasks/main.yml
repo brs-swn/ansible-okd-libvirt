@@ -3,3 +3,4 @@
   - include_tasks: server-network-setup.yml
   - include_tasks: service-kvm-net.yml
   - include_tasks: service-okd4-install.yml
+  - include_tasks: service-kvm-cicd.yml

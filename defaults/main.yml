@@ -8,6 +8,7 @@ dnf_packages:
   - coreos-installer
   - butane
   - python3-lxml
+  - terraform
 
 # Interface and Virtual Network
 # Interface IP is taken from ansible_host defined in the inventory hosts file.

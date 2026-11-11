@@ -1,0 +1,29 @@
+- name: Create root Terraform KVM directory
+  file:
+    path: "/root/cicd_kvm"
+    state: directory
+    mode: 0775
+    owner: root
+    group: root
+  tags:
+    - cicd
+
+- name: Generate CICD Include Vars
+  template:
+    src=cicd_kvm/cicd_vm_list.inc.j2
+    dest=/root/cicd_kvm/cicd_vm_list.inc
+    owner=root
+    group=root
+    mode=0755
+  tags:
+    - cicd
+
+- name: Copy CICD Scripts
+  copy:
+    src: "files/cicd_kvm/"
+    dest: "/root/cicd_kvm"
+    owner: root
+    group: root
+    mode: 0755
+  tags:
+    - cicd

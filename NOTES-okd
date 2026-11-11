@@ -1,0 +1,21 @@
+Ground-up process:
+- Define Hosts File (Name, MAC, IP)
+- Define group_vars overrides for versions and network definitions.
+  > Needs to be done for both the Services and Libvirt Playbooks
+- Push Ansible playbook to service node
+  > Set up SSH keys (can be automated)
+- Push Ansible playbook to KVM hypervisor
+  > Set up SSH keys (can be automated)
+
+Reboot Automation
+ - Remove Install Boot Options
+ - Setting SE Linux
+RPM OSTree
+ - Added case statement for OKD node type.
+ - Disk Space fwupd-refresh.service rpm-ostreed.servicea
+   > sudo mount -o remount,size=90% tmpfs /run
+
+https://okd.io/docs/project/guides/upi-sno/
+https://github.com/mcaimi/okd4-deploy/blob/master/vars/okd_cluster
+https://docs.okd.io/latest/support/troubleshooting/troubleshooting-installations.html
+https://docs.okd.io/4.21/extensions/index.html
